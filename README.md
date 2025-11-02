@@ -1,17 +1,70 @@
-This script is for generating wear index report for routes. In the first version, the inputs are only origin and destination postcodes. The route is generated automatically and a wear index report is generated based on the route.
+# Wear Index Report Generator for Routes
 
-The report now contains four basic numbers: route distance, total wear for 6 tyres, average wear index per km, and equivalent wear of tread depth per 1000km on each tyre. In addition, a map of the route and markers of where wear happens is added.
+This script generates **wear index reports** for vehicle routes. Given origin and destination postcodes, it automatically generates a route and produces a detailed report of tyre wear.
 
-In the script, the main function calls the function `wear_index` for calculation. The flow of the script is as follow: 
+---
 
-1. The postcodes are parsed using function `geocode`.
-2. Route is generated using function `compute_route`.
-3. Coordinates and distance are calculated from the route using function `route_info_to_meter`.
-4. The coordinates are resampled for constant speed simulation using function `resample_curve_fixed_step`.
-5. Turns in the route where wear happens are extracted using function `extract_sections`.
-6. The sections extracted are simulated for wear index using function `stitch_simulation`.
-7. The calculation results are used for report generation using function `generate_report`.
+## 🧠 Overview
 
-For wear calculation on a single tyre, there are two models to choose: an empirical model based on slip angle and load, and a surrogate model derived from a tyre-road contact model. 
-The vehicle dynamics simulation in the script is based on a 6-wheel semi-trailer with 385/65R22.5 tyres.
-The details can be refered to Liu, C. (2024). *Investigation of Severe Abrasive Truck Tyre Wear* [doi.org/10.17863/CAM.111100](https://doi.org/10.17863/CAM.111100).
+The generated report contains:
+
+- **Route distance**  
+- **Total wear for 6 tyres**  
+- **Average wear index per km**  
+- **Equivalent tread depth wear per 1000 km** on each tyre  
+- A **map of the route** with markers indicating where wear occurs  
+
+The script simulates tyre wear based on vehicle dynamics and wear model for a single tyre.
+
+---
+
+## ⚙️ Script Workflow
+
+The main script calls the `wear_index` function to perform the calculations. The workflow is as follows:
+
+1. **Geocode Postcodes**  
+   - Postcodes are parsed using the `geocode` function.
+
+2. **Generate Route**  
+   - Route is computed using the `compute_route` function.
+
+3. **Calculate Coordinates and Distance**  
+   - The `route_info_to_meter` function converts route data into coordinates and distances.
+
+4. **Resample Route for Simulation**  
+   - The `resample_curve_fixed_step` function ensures a constant speed simulation.
+
+5. **Extract Wear-Relevant Sections**  
+   - Turns and sections where wear is significant are identified using the `extract_sections` function.
+
+6. **Simulate Wear Index**  
+   - Wear for each section is simulated using the `stitch_simulation` function.
+
+7. **Generate Report**  
+   - Results are compiled into a report with the `generate_report` function.
+
+---
+
+## 🧩 Wear Calculation Models
+
+The script supports two models for calculating wear on a single tyre:
+
+1. **Empirical Model** – Based on slip angle and load from empirical measurements
+2. **Surrogate Model** – Derived from a wear model based on tyre-road contact and local wear law
+
+Vehicle dynamics are simulated for a **6-wheel semi-trailer** equipped with **385/65R22.5 tyres**.
+
+---
+
+## 📚 References
+
+Liu, C. (2024). *Investigation of Severe Abrasive Truck Tyre Wear.* [doi.org/10.17863/CAM.111100](https://doi.org/10.17863/CAM.111100)  
+
+---
+
+## 🧩 Usage
+
+To run the script:
+
+```bash
+python wear_index_report.py --origin <ORIGIN_POSTCODE> --destination <DESTINATION_POSTCODE>
