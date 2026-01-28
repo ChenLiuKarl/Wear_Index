@@ -4,6 +4,7 @@ import pathlib
 import time
 import requests
 import polyline
+import isodate
 import io
 import os
 
@@ -16,6 +17,8 @@ from PIL import ImageDraw, Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
 from matplotlib import colors as mcolors
 from typing import Tuple, Optional
 from scipy.interpolate import make_smoothing_spline
@@ -146,29 +149,26 @@ def compute_route(origin: dict,
                   travel_mode="DRIVE",
                   traffic=False):
     """
-    origin/destination = {"lat": float, "lng": float}
-    Returns distance (m), duration, and decoded polyline coordinates.
+    Compute a route using Google Maps Routes API v2.
+
+    Parameters:
+        origin/destination = {"lat": float, "lng": float}
+        travel_mode: "DRIVE", "WALK", "BICYCLE", "TWO_WHEELER"
+        traffic: If True, uses traffic-aware routing
+
+    Returns:
+        dict with:
+            - distance_meters: float
+            - encoded_polyline: str
+            - decoded_points: list of (lat, lng) tuples
     """
 
-    ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
+    # Add your API key here
+    ROUTES_URL = f"https://routes.googleapis.com/directions/v2:computeRoutes?key={GM_API_KEY}"
 
     body = {
-        "origin": {
-            "location": {
-                "latLng": {
-                    "latitude": origin["lat"],
-                    "longitude": origin["lng"]
-                }
-            }
-        },
-        "destination": {
-            "location": {
-                "latLng": {
-                    "latitude": destination["lat"],
-                    "longitude": destination["lng"]
-                }
-            }
-        },
+        "origin": {"location": {"latLng": {"latitude": origin["lat"], "longitude": origin["lng"]}}},
+        "destination": {"location": {"latLng": {"latitude": destination["lat"], "longitude": destination["lng"]}}},
         "travelMode": travel_mode,
         "polylineQuality": "HIGH_QUALITY",
         "routingPreference": "TRAFFIC_AWARE" if traffic else "TRAFFIC_UNAWARE",
@@ -183,29 +183,33 @@ def compute_route(origin: dict,
     }
 
     headers = {
-        "Content-Type":
-        "application/json",
-        "X-Goog-Api-Key":
-        GM_API_KEY,
+        "Content-Type": "application/json",
         # Only request what we need
-        "X-Goog-FieldMask":
-        "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
+        "X-Goog-FieldMask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
     }
 
+    # Send POST request
     r = requests.post(ROUTES_URL, headers=headers, json=body)
-    r.raise_for_status()
+    
+    try:
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error: {e}, response: {r.text}")
+        raise
+
     data = r.json()
 
     if not data.get("routes"):
-       logger.error("No route found.")
+        raise ValueError("No route found.")
 
     route = data["routes"][0]
+
+    # Decode polyline
     encoded_poly = route["polyline"]["encodedPolyline"]
-    decoded_points = polyline.decode(encoded_poly)  # returns [(lat, lng), ...]
+    decoded_points = polyline.decode(encoded_poly)  # [(lat, lng), ...]
 
     return {
         "distance_meters": route["distanceMeters"],
-        "duration": route["duration"],
         "encoded_polyline": encoded_poly,
         "decoded_points": decoded_points
     }
@@ -697,40 +701,112 @@ def generate_report(wheel_data, s_total, x_coords, y_coords, origin,
 
     n_cols = wheel_data.shape[1]
     wear = np.zeros(n_cols)
-
     for i in range(n_cols):
         wear[i] = np.sum(wheel_data[:, i])
 
+    wear_wheel = np.zeros(6)
+    for i in range(6):
+        wear_wheel[i] = np.sum(wheel_data[i, :])
+
     s_total = s_total / 1000.0
 
-    total_wear = np.sum(wear)
+    front_wear = (wear_wheel[4] + wear_wheel[5])/2.0/s_total
+    mid_wear = (wear_wheel[2] + wear_wheel[3])/2.0/s_total
+    rear_wear = (wear_wheel[0] + wear_wheel[1])/2.0/s_total
+    total_wear = np.sum(wear_wheel)
 
     av_wear = total_wear / s_total
 
+    if av_wear < 0.6:
+        wear_level = 'Low'
+    elif av_wear < 1.8:
+        wear_level = 'Mid'
+    else:
+        wear_level = 'High'
+
     mm_wear = av_wear/6.0
 
-    y_start = PAGE_HEIGHT - MARGIN - 15
+    distance = 15.0/mm_wear*1000
+    distance_f = 15.0/front_wear*1000
+    distance_m = 15.0/mid_wear*1000
+    distance_r = 15.0/rear_wear*1000
 
-    c.setFont("Helvetica", 14)
-    c.drawString(MARGIN, y_start, f"Total distance: {s_total:.1f}km.")
+    y_start = PAGE_HEIGHT - MARGIN - 13
+
+    c.setFont("Helvetica", 12)
+    c.drawString(MARGIN, y_start, f"Total distance: {s_total:.1f}km")
+
+    y_start -= 13
+
+    c.drawString(MARGIN, y_start, f"Total wear: {total_wear:.2f}g")
+
+    y_start -= 17
+
+    c.drawString(MARGIN, y_start, "Wear index (sum of 6 tyres):")
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(MARGIN + 150, y_start, f"{av_wear:.3f}g/km {wear_level}")
 
     y_start -= 15
+    c.setFont("Helvetica", 12)
+    c.drawString(MARGIN, y_start, "Equivalent wear per tyre per 1000km:")
 
-    c.setFont("Helvetica", 14)
-    c.drawString(MARGIN, y_start, f"Total wear: {total_wear:.2f}g.")
+    data = [
+        ["Front", "Mid", "Rear", "Average"],
+        [f"{front_wear:.3f}mm", f"{mid_wear:.3f}mm", f"{rear_wear:.3f}mm", f"{mm_wear:.3f}mm"],
+    ]
 
-    y_start -= 15
+    col_widths = [125, 125, 125, 125]  # total = 500
 
-    c.drawString(MARGIN, y_start, f"Average wear index: {av_wear:.3f}g/km (sum of 6 tyres).")
+    table = Table(data, colWidths=col_widths, rowHeights=20)
 
-    y_start -= 15
+    table.setStyle(TableStyle([
+        ("FONT", (0, 0), (-1, -1), "Helvetica", 12),
+        ("GRID", (0, 0), (-1, -1), 1, colors.black),
 
-    c.drawString(MARGIN, y_start, f"Equivalent wear per tyre: {mm_wear:.3f}mm per 1000km.")
+        # center all cells
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+    ]))
 
+    # draw table
+    y_start -= 45
+    table.wrapOn(c, 500, 200)
+    table.drawOn(c, MARGIN, y_start)
+
+    y_start -= 13
+    c.setFont("Helvetica", 12)
+    c.drawString(MARGIN, y_start, "Estimated tyre life (16mm tread):")
+
+    data = [
+        ["Front", "Mid", "Rear", "Average"],
+        [f"{distance_f:,.0f}km", f"{distance_m:,.0f}km", f"{distance_r:,.0f}km", f"{distance:,.0f}km"],
+    ]
+
+    col_widths = [125, 125, 125, 125]  # total = 500
+
+    table = Table(data, colWidths=col_widths, rowHeights=20)
+
+    table.setStyle(TableStyle([
+        ("FONT", (0, 0), (-1, -1), "Helvetica", 12),
+        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+
+        # center all cells
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+    ]))
+
+    # draw table
+    y_start -= 45
+    table.wrapOn(c, 500, 200)
+    table.drawOn(c, MARGIN, y_start)
+
+    # Calculate map corner coordinates in km
     geo = gpd.GeoSeries(gpd.points_from_xy(x_coords, y_coords),
                         crs="EPSG:3857")
 
-    # Calculate map corner coordinates in km
     corners = calculate_corner(geo)
 
     # Fetch map image
@@ -756,6 +832,62 @@ def generate_report(wheel_data, s_total, x_coords, y_coords, origin,
                 width=CONTENT_WIDTH,
                 height=map_scale_height)
     map_image.close()
+
+    # ----------add explanation of wear index----------
+    initialize_page()
+
+    y_start = PAGE_HEIGHT - MARGIN - 13
+
+    c.setFont("Helvetica", 12)
+    c.drawString(MARGIN, y_start, "Explanation of wear index:")
+
+    data = [
+        ["", "Wear index", "Wear per tyre", "Tyre life"],
+        ["Low wear (long-haul)", "<0.6 g/km", "<0.1 mm/1000km", "> 150,000 km"],
+        ["Mid wear (mixed)", "0.6 - 1.8 g/km", "0.1 - 0.3 mm/1000km", "50,000 - 150,000 km"],
+        ["High wear (urban)", "> 1.8 g/km", "> 0.3 mm/1000km", "< 50,000 km"],
+    ]
+
+    col_widths = [120, 80, 150, 150]  # total = 500
+
+    table = Table(data, colWidths=col_widths, rowHeights=20)
+
+    table.setStyle(TableStyle([
+        ("FONT", (0, 0), (-1, -1), "Helvetica", 12),
+        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+
+        # center all cells
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+
+        # left-align first column only
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+
+        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+    ]))
+
+    y_start -= 10 + 20 * len(data)
+    # draw table
+    table.wrapOn(c, 500, 200)
+    table.drawOn(c, MARGIN, y_start)
+
+    img_path = "wear_range.jpg"
+    img = ImageReader(img_path)
+
+    orig_w, orig_h = img.getSize()
+    target_w = 500
+    scale = target_w / orig_w
+    target_h = orig_h * scale
+
+    c.drawImage(
+        img,
+        MARGIN,
+        y_start - 10 - target_h,   # so the image starts *under* y_start
+        width=target_w,
+        height=target_h,
+        preserveAspectRatio=True,
+        mask='auto'
+    )
 
     # ----------Save file----------
     c.save()

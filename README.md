@@ -67,4 +67,4 @@ Liu, C. (2024). *Investigation of Severe Abrasive Truck Tyre Wear.* [doi.org/10.
 To run the script:
 
 ```bash
-python wear_index_report.py --origin <ORIGIN_POSTCODE> --destination <DESTINATION_POSTCODE>
+python wear_index.py --start <ORIGIN_POSTCODE> --end <DESTINATION_POSTCODE> --output <OUTPUT_FILE>
