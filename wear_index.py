@@ -200,7 +200,7 @@ def compute_route(origin: dict,
     data = r.json()
 
     if not data.get("routes"):
-        raise ValueError("No route found.")
+        logger.error("No route found.")
 
     route = data["routes"][0]
 
